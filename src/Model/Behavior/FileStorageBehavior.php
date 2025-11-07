@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 /**
@@ -8,6 +9,7 @@ declare(strict_types=1);
  * @copyright 2012 - 2017 Florian Krämer
  * @license MIT
  */
+
 namespace Burzum\FileStorage\Model\Behavior;
 
 use ArrayAccess;
@@ -20,6 +22,7 @@ use Cake\Event\EventDispatcherTrait;
 use Cake\Event\EventInterface;
 use Shim\Filesystem\File;
 use Cake\ORM\Behavior;
+use Psr\Http\Message\UploadedFileInterface;
 
 /**
  * Storage Behavior
@@ -66,8 +69,35 @@ class FileStorageBehavior extends Behavior
     protected function _isFileUploadPresent($entity): bool
     {
         $field = $this->getConfig('fileField');
+
+        // Handle EntityInterface objects
+        if ($entity instanceof EntityInterface) {
+            if (!$entity->has($field)) {
+                return false;
+            }
+            $file = $entity->get($field);
+        } elseif (is_array($entity) || $entity instanceof ArrayAccess) {
+            // Handle arrays and ArrayAccess objects
+            if (!isset($entity[$field])) {
+                return false;
+            }
+            $file = $entity[$field];
+        } else {
+            return false;
+        }
+
         if ($this->getConfig('ignoreEmptyFile') === true) {
-            if (!isset($entity[$field]['error']) || $entity[$field]['error'] === UPLOAD_ERR_NO_FILE) {
+            // Handle UploadedFileInterface objects (CakePHP 4+)
+            if ($file instanceof UploadedFileInterface) {
+                if ($file->getError() === UPLOAD_ERR_NO_FILE) {
+                    return false;
+                }
+            } elseif (is_array($file)) {
+                // Handle legacy array format
+                if (!isset($file['error']) || $file['error'] === UPLOAD_ERR_NO_FILE) {
+                    return false;
+                }
+            } else {
                 return false;
             }
         }
@@ -155,7 +185,21 @@ class FileStorageBehavior extends Behavior
                 if ($fileHashMethod === true) {
                     $fileHashMethod = 'sha1';
                 }
-                $entity->set('hash', StorageUtils::getFileHash($entity->get('file')['tmp_name'], $fileHashMethod));
+                $file = $entity->get('file');
+                $tmpName = null;
+
+                // Handle UploadedFileInterface objects (CakePHP 4+)
+                if ($file instanceof UploadedFileInterface) {
+                    $stream = $file->getStream();
+                    $tmpName = $stream->getMetadata('uri');
+                } elseif (is_array($file) && isset($file['tmp_name'])) {
+                    // Handle legacy array format
+                    $tmpName = $file['tmp_name'];
+                }
+
+                if ($tmpName) {
+                    $entity->set('hash', StorageUtils::getFileHash($tmpName, $fileHashMethod));
+                }
             }
         }
     }
@@ -222,15 +266,42 @@ class FileStorageBehavior extends Behavior
      */
     public function _getFileInfoFromUpload(&$upload, string $field = 'file'): void
     {
-        if (!empty($upload[$field]['tmp_name'])) {
-            $File = new File($upload[$field]['tmp_name']);
-            $upload['filesize'] = filesize($upload[$field]['tmp_name']);
-            $upload['mime_type'] = $File->mime();
+        if (!isset($upload[$field])) {
+            return;
         }
 
-        if (!empty($upload[$field]['name'])) {
-            $upload['extension'] = pathinfo($upload[$field]['name'], PATHINFO_EXTENSION);
-            $upload['filename'] = $upload[$field]['name'];
+        $file = $upload[$field];
+        $tmpName = null;
+        $fileName = null;
+
+        // Handle UploadedFileInterface objects (CakePHP 4+)
+        if ($file instanceof UploadedFileInterface) {
+            $stream = $file->getStream();
+            $tmpName = $stream->getMetadata('uri');
+            $fileName = $file->getClientFilename();
+
+            if ($tmpName) {
+                $File = new File($tmpName);
+                $upload['filesize'] = $file->getSize();
+                $upload['mime_type'] = $file->getClientMediaType() ?: $File->mime();
+            }
+
+            if ($fileName) {
+                $upload['extension'] = pathinfo($fileName, PATHINFO_EXTENSION);
+                $upload['filename'] = $fileName;
+            }
+        } elseif (is_array($file)) {
+            // Handle legacy array format
+            if (!empty($file['tmp_name'])) {
+                $File = new File($file['tmp_name']);
+                $upload['filesize'] = filesize($file['tmp_name']);
+                $upload['mime_type'] = $File->mime();
+            }
+
+            if (!empty($file['name'])) {
+                $upload['extension'] = pathinfo($file['name'], PATHINFO_EXTENSION);
+                $upload['filename'] = $file['name'];
+            }
         }
     }
 
