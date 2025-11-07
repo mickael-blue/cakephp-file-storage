@@ -254,6 +254,36 @@ class FileStorageBehavior extends Behavior
     }
 
     /**
+     * Normalizes a filename to ensure proper UTF-8 encoding for database storage.
+     *
+     * @param string $filename The filename to normalize
+     * @return string The normalized filename
+     */
+    protected function _normalizeFilename(string $filename): string
+    {
+        // Normalize Unicode characters (NFC form) - combines combining characters
+        if (class_exists('Normalizer') && function_exists('normalizer_normalize')) {
+            $normalized = normalizer_normalize($filename, \Normalizer::FORM_C);
+            if ($normalized !== false) {
+                $filename = $normalized;
+            }
+        }
+
+        // Ensure proper UTF-8 encoding
+        if (!mb_check_encoding($filename, 'UTF-8')) {
+            $filename = mb_convert_encoding($filename, 'UTF-8', 'UTF-8');
+        }
+
+        // Remove any invalid UTF-8 characters and ensure it's valid UTF-8
+        $filename = mb_convert_encoding($filename, 'UTF-8', 'UTF-8');
+
+        // Remove any remaining invalid characters
+        $filename = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $filename);
+
+        return $filename;
+    }
+
+    /**
      * Gets information about the file that is being uploaded.
      *
      * - gets the file size
@@ -287,6 +317,7 @@ class FileStorageBehavior extends Behavior
             }
 
             if ($fileName) {
+                $fileName = $this->_normalizeFilename($fileName);
                 $upload['extension'] = pathinfo($fileName, PATHINFO_EXTENSION);
                 $upload['filename'] = $fileName;
             }
@@ -299,8 +330,9 @@ class FileStorageBehavior extends Behavior
             }
 
             if (!empty($file['name'])) {
-                $upload['extension'] = pathinfo($file['name'], PATHINFO_EXTENSION);
-                $upload['filename'] = $file['name'];
+                $fileName = $this->_normalizeFilename($file['name']);
+                $upload['extension'] = pathinfo($fileName, PATHINFO_EXTENSION);
+                $upload['filename'] = $fileName;
             }
         }
     }
